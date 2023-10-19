@@ -9,7 +9,7 @@ import { JwtStrategy } from 'src/config/jwt.strategy';
 
 @Module({
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy,PrismaService],
+  providers: [AuthService, JwtStrategy, PrismaService],
   imports: [
     ConfigModule,
     JwtModule.registerAsync({

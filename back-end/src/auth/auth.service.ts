@@ -1,69 +1,132 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { PrismaService } from 'src/prisma.service';
-import { AuthDto } from './auth.dto';
+import { AuthDto } from './dto/auth.dto';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { hash, verify } from 'argon2';
+import { TeacherCreateDto } from './dto/teacher.dto';
+import { Teacher } from '@prisma/client';
+import { RefreshToken } from './dto/refreshToken.dto';
 
 @Injectable()
 export class AuthService {
-    constructor(private prisma: PrismaService, private jwt: JwtService, private configService: ConfigService) {}
+  constructor(
+    private prisma: PrismaService,
+    private jwt: JwtService,
+    private configService: ConfigService,
+  ) {}
 
-    async createAdmin() {
-        const adminIsExists = await this.prisma.admin.findMany()
+  // Создание админа
 
-        const hashPassword = await hash(this.configService.get("PASSWORD_PASSPORT"))
+  async createAdmin() {
+    const adminIsExists = await this.prisma.admin.findMany();
 
-        console.log(this.configService.get("PASSWORD_PASSPORT"));
-        
+    const hashPassword = await hash(this.configService.get('ADMIN_PASSWORD'));
 
-        if (!adminIsExists) {
-            const admin = await this.prisma.admin.create({
-                data: {
-                    login: this.configService.get("ADMIN_LOGIN"),
-                    password: hashPassword
-                }
-            })
+    if (adminIsExists) return;
 
-            const tokens = await this.issueTokens(admin.id)
+    const admin = await this.prisma.admin.create({
+      data: {
+        login: this.configService.get('ADMIN_LOGIN'),
+        password: hashPassword,
+      },
+    });
 
-            return {
-                ...tokens
-            }
-        }
-    }
+    const tokens = await this.issueTokens(admin.id);
 
-    async loginAdmin(dto: AuthDto) {
-        const login = this.configService.get("ADMIN_LOGIN")
+    return {
+      ...tokens,
+    };
+  }
 
-        const admin = await this.prisma.admin.findUnique({
-            where: { login: dto.login }
-        })
+  // Создание учителя
 
-        const isValid = await verify(admin.password, dto.password)
+  async createTeacher(dto: TeacherCreateDto) {
+    const isExist = await this.prisma.teacher.findUnique({
+      where: { fullName: dto.fullName },
+    });
 
-        if (!isValid) throw new UnauthorizedException('Invalid login or password')
+    if (isExist) throw new BadRequestException('This teacher already exist');
 
-        const tokens = await this.issueTokens(admin.id)
+    const teacher = await this.prisma.teacher.create({
+      data: { ...dto, password: await hash(dto.password) },
+    });
 
-        return {
-            ...tokens
-        }
-    }
+    const tokens = await this.issueTokens(teacher.id);
 
-    // async login() {}
+    return [teacher.fullName, { ...tokens }];
+  }
 
-    private async issueTokens(adminId: number) {
-        const data = { id: adminId }
+  // Вход в профиль админа
 
-        const accessToken = this.jwt.sign(data, {
-            expiresIn: '1h'
-        })
+  async loginAdmin(dto: AuthDto) {
+    const admin = await this.prisma.admin.findUnique({
+      where: { login: dto.login },
+    });
 
-        const refreshToken = this.jwt.sign(data, {
-            expiresIn: '7d'
-        })
+    if (!admin) throw new UnauthorizedException('Invalid login or password');
 
-        return { accessToken, refreshToken }
-    }
+    const isValid = await verify(admin.password, dto.password);
+
+    if (!isValid) throw new UnauthorizedException('Invalid login or password');
+
+    const tokens = await this.issueTokens(admin.id);
+
+    return {
+      ...tokens,
+    };
+  }
+
+  // Вход в профиль учителя
+
+  async loginTeacher(dto: TeacherCreateDto) {
+    const teacher = await this.prisma.teacher.findUnique({
+      where: { fullName: dto.fullName },
+    });
+
+    if (!teacher) throw new UnauthorizedException('Invalid login or password');
+
+    const isValidPassword = await verify(teacher.password, dto.password);
+
+    if (!isValidPassword)
+      throw new UnauthorizedException('Invalid login or password');
+
+    const tokens = await this.issueTokens(teacher.id);
+
+    return [{...teacher}, {...tokens}];
+  }
+
+  // Получение новых токенов
+
+  async getNewTokens(refreshToken: RefreshToken) {
+    const result = await this.jwt.verifyAsync(refreshToken.refreshToken)
+
+    if(!result) throw new UnauthorizedException('Token is not valid')
+
+    const teacher = await this.prisma.teacher.findUnique({where: {id: result.id}})
+
+    const tokens = await this.issueTokens(teacher.id)
+
+    return [{...teacher}, {...tokens}];
+  }
+
+  // Функция для создание токенов
+
+  private async issueTokens(userId: number) {
+    const data = { id: userId };
+
+    const accessToken = this.jwt.sign(data, {
+      expiresIn: '1h',
+    });
+
+    const refreshToken = this.jwt.sign(data, {
+      expiresIn: '7d',
+    });
+
+    return { accessToken, refreshToken };
+  }
 }
